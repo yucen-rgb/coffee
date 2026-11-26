@@ -1,0 +1,170 @@
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+using UnityEngine.XR.Interaction.Toolkit;
+
+namespace CoffeeVR.Interaction
+{
+    /// <summary>
+    /// Bridges XRI selection events to a stable item ID and a small API for gameplay systems.
+    /// Item IDs identify item types, not individual scene instances.
+    /// </summary>
+    [DisallowMultipleComponent]
+    [RequireComponent(typeof(XRGrabInteractable))]
+    public sealed class GrabInteractable : MonoBehaviour
+    {
+        [SerializeField] private string itemId;
+        [SerializeField] private XRGrabInteractable grabInteractable;
+        [SerializeField] private Rigidbody itemRigidbody;
+
+        public string ItemId => itemId;
+        public bool IsGrabbed { get; private set; }
+        public XRGrabInteractable XrInteractable => grabInteractable;
+
+        public event Action<GrabInteractable> Grabbed;
+        public event Action<GrabInteractable> Released;
+
+        private void Reset()
+        {
+            grabInteractable = GetComponent<XRGrabInteractable>();
+        }
+
+        private void Awake()
+        {
+            if (grabInteractable == null)
+                grabInteractable = GetComponent<XRGrabInteractable>();
+            if (itemRigidbody == null)
+                itemRigidbody = GetComponent<Rigidbody>();
+            if (itemRigidbody == null)
+                itemRigidbody = gameObject.AddComponent<Rigidbody>();
+
+            SetIdlePhysicsState();
+        }
+
+        private void OnEnable()
+        {
+            if (grabInteractable == null)
+                grabInteractable = GetComponent<XRGrabInteractable>();
+            if (itemRigidbody == null)
+                itemRigidbody = GetComponent<Rigidbody>();
+            if (grabInteractable == null)
+                return;
+
+            grabInteractable.selectEntered.AddListener(HandleSelectEntered);
+            grabInteractable.selectExited.AddListener(HandleSelectExited);
+        }
+
+        private void OnDisable()
+        {
+            if (grabInteractable != null)
+            {
+                grabInteractable.selectEntered.RemoveListener(HandleSelectEntered);
+                grabInteractable.selectExited.RemoveListener(HandleSelectExited);
+            }
+
+            if (IsGrabbed)
+                SetGrabbed(false, false);
+        }
+
+        private void HandleSelectEntered(SelectEnterEventArgs args)
+        {
+            SetGrabbed(true);
+        }
+
+        private void HandleSelectExited(SelectExitEventArgs args)
+        {
+            SetGrabbed(false);
+        }
+
+        private void SetGrabbed(bool grabbed, bool applyReleasePhysics = true)
+        {
+            if (IsGrabbed == grabbed)
+                return;
+
+            IsGrabbed = grabbed;
+            if (grabbed)
+            {
+                // SelectEntered is raised only after XRI has accepted the selection.
+                // Keep the selected body under XRI's kinematic pose tracking.
+                if (itemRigidbody != null)
+                {
+                    itemRigidbody.isKinematic = true;
+                    itemRigidbody.useGravity = false;
+                }
+                GrabInteractionAPI.RegisterGrab(this);
+                Grabbed?.Invoke(this);
+            }
+            else
+            {
+                // XRI has finished SelectExited before this listener runs. Resume physics from
+                // rest so an unselected object cannot inherit controller velocity or spin.
+                if (applyReleasePhysics && itemRigidbody != null)
+                {
+                    itemRigidbody.isKinematic = false;
+                    itemRigidbody.velocity = Vector3.zero;
+                    itemRigidbody.angularVelocity = Vector3.zero;
+                    itemRigidbody.useGravity = true;
+                }
+                GrabInteractionAPI.RegisterRelease(this);
+                Released?.Invoke(this);
+            }
+        }
+
+        private void SetIdlePhysicsState()
+        {
+            if (itemRigidbody == null)
+                return;
+
+            // Scene placement is authoritative until XRI reports a successful selection.
+            // Only normalize a body that is unexpectedly dynamic; already-static bodies
+            // should not be toggled through a simulated dynamic state during Awake.
+            if (!itemRigidbody.isKinematic)
+            {
+                itemRigidbody.velocity = Vector3.zero;
+                itemRigidbody.angularVelocity = Vector3.zero;
+                itemRigidbody.isKinematic = true;
+            }
+            itemRigidbody.useGravity = false;
+        }
+
+#if UNITY_EDITOR
+        public void EditorSetItemId(string value) => itemId = value;
+#endif
+    }
+
+    /// <summary>Events and current held item(s) exposed to Member B.</summary>
+    public static class GrabInteractionAPI
+    {
+        private static readonly List<GrabInteractable> HeldItems = new List<GrabInteractable>();
+
+        public static event Action<GrabInteractable> ItemGrabbed;
+        public static event Action<GrabInteractable> ItemReleased;
+
+        /// <summary>The most recently grabbed item that is still held, or null.</summary>
+        public static GrabInteractable CurrentGrabbedItem =>
+            HeldItems.Count == 0 ? null : HeldItems[HeldItems.Count - 1];
+
+        /// <summary>A snapshot of all currently held items; supports both hands at once.</summary>
+        public static GrabInteractable[] CurrentGrabbedItems => HeldItems.ToArray();
+
+        public static bool IsItemGrabbed(GrabInteractable item) =>
+            item != null && item.IsGrabbed;
+
+        internal static void RegisterGrab(GrabInteractable item)
+        {
+            if (item == null || HeldItems.Contains(item))
+                return;
+            HeldItems.Add(item);
+            ItemGrabbed?.Invoke(item);
+        }
+
+        internal static void RegisterRelease(GrabInteractable item)
+        {
+            if (item == null)
+                return;
+            HeldItems.Remove(item);
+            ItemReleased?.Invoke(item);
+        }
+    }
+}
+

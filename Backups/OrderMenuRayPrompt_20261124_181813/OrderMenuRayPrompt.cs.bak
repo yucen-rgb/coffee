@@ -1,0 +1,81 @@
+﻿using System.Collections;
+using UnityEngine;
+using UnityEngine.XR.Interaction.Toolkit;
+
+public class OrderMenuRayPrompt : MonoBehaviour
+{
+    [SerializeField] private XRSimpleInteractable orderMenuTarget;
+    [SerializeField] private GameObject orderPrompt;
+    [SerializeField] private float hideDelay = 0.4f;
+
+    private Coroutine hideCoroutine;
+
+    private void Awake()
+    {
+        if (orderMenuTarget == null)
+            orderMenuTarget = GetComponent<XRSimpleInteractable>();
+
+        if (orderPrompt != null)
+            orderPrompt.SetActive(false);
+    }
+
+    private void OnEnable()
+    {
+        if (orderMenuTarget == null)
+            return;
+
+        orderMenuTarget.hoverEntered.AddListener(HandleHoverEntered);
+        orderMenuTarget.hoverExited.AddListener(HandleHoverExited);
+    }
+
+    private void OnDisable()
+    {
+        if (orderMenuTarget != null)
+        {
+            orderMenuTarget.hoverEntered.RemoveListener(HandleHoverEntered);
+            orderMenuTarget.hoverExited.RemoveListener(HandleHoverExited);
+        }
+
+        StopHideCoroutine();
+
+        if (orderPrompt != null)
+            orderPrompt.SetActive(false);
+    }
+
+    private void HandleHoverEntered(HoverEnterEventArgs args)
+    {
+        StopHideCoroutine();
+
+        if (orderPrompt != null)
+            orderPrompt.SetActive(true);
+    }
+
+    private void HandleHoverExited(HoverExitEventArgs args)
+    {
+        StopHideCoroutine();
+        hideCoroutine = StartCoroutine(HidePromptAfterDelay());
+    }
+
+    private IEnumerator HidePromptAfterDelay()
+    {
+        yield return new WaitForSecondsRealtime(hideDelay);
+
+        // 若另一隻手的射線仍指向目標，就繼續顯示提示。
+        if (orderMenuTarget == null || !orderMenuTarget.isHovered)
+        {
+            if (orderPrompt != null)
+                orderPrompt.SetActive(false);
+        }
+
+        hideCoroutine = null;
+    }
+
+    private void StopHideCoroutine()
+    {
+        if (hideCoroutine == null)
+            return;
+
+        StopCoroutine(hideCoroutine);
+        hideCoroutine = null;
+    }
+}
